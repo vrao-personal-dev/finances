@@ -1,0 +1,17 @@
+name: Prevent Force Pushes
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  check-force-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for force push
+        run: |
+          if [ "${{ github.event.forced }}" = "true" ]; then
+            echo "Force push detected. Rejecting push."
+            exit 1
+          fi
