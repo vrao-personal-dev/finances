@@ -22,6 +22,26 @@ def main(
     csv_path = os.path.expanduser(csv_path)
     monarch_df = pd.read_csv(csv_path)
 
+    # Validate and pre-process CSV columns
+    required_cols = {
+        "Date",
+        "Merchant",
+        "Category",
+        "Account",
+        "Original Statement",
+        "Amount",
+    }
+    missing_cols = required_cols - set(monarch_df.columns)
+    if missing_cols:
+        raise ValueError(
+            f"CSV is missing required columns: {', '.join(sorted(missing_cols))}"
+        )
+
+    # Ensure optional columns exist to avoid KeyError later
+    for optional_col in ("Notes", "Tags"):
+        if optional_col not in monarch_df.columns:
+            monarch_df[optional_col] = ""
+
     latest_dates = {}
 
     with get_conn() as conn:
@@ -35,8 +55,8 @@ def main(
             latest_dates[account_name] = latest_date
 
         # Apply the account name mapping and filter the DataFrame to include only new transactions
-        # Apply account name mapping
-        monarch_df["Account"] = monarch_df["Account"].map(MONARCH_ACCOUNT_NAME_MAPPING)
+        # Apply account name mapping (fallback to original name when not in mapping)
+        monarch_df["Account"] = monarch_df["Account"].replace(MONARCH_ACCOUNT_NAME_MAPPING)
 
         # Convert Date column to Timestamp for robust comparisons
         monarch_df["Date"] = pd.to_datetime(monarch_df["Date"])
