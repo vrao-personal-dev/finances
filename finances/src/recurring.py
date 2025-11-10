@@ -7,9 +7,31 @@ from datetime import timedelta
 conn = sqlite3.connect('finances/src/mint_transactions.db')  # double check path
 cursor = conn.cursor()
 
+# Supported accounts we want to consider for recurring-payment detection
+SUPPORTED_ACCOUNTS = (
+    "Savings",
+    "SOFI Credit Card",
+    "SOFI Checking",
+    "SOFI Saving",
+    "Apple Card",
+    "Apple Cash",
+    "Venmo",
+    "Robinhood Credit Card",
+)
+placeholders = ",".join(["?"] * len(SUPPORTED_ACCOUNTS))
+
 # Load transactions into a DataFrame
-query = "SELECT AccountName, Amount, Description, Date FROM transactions"
-transactions_df = pd.read_sql_query(query, conn)
+query = f"""
+    SELECT
+        AccountName,
+        Amount,
+        COALESCE(Description, OriginalDescription) AS Description,
+        Date
+    FROM transactions
+    WHERE TransactionType = 'debit'
+      AND AccountName IN ({placeholders})
+"""
+transactions_df = pd.read_sql_query(query, conn, params=SUPPORTED_ACCOUNTS)
 
 # Convert Date column to Datetime
 transactions_df['Date'] = pd.to_datetime(transactions_df['Date'])
