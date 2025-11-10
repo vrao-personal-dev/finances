@@ -31,7 +31,8 @@ def identify_recurring_payments(df):
 
         # Find similar descriptions
         for desc in descriptions:
-            similar_descs = model.wv.most_similar(positive=[desc], topn=5)
+            # `desc` is already a list of tokens → pass directly
+            similar_descs = model.wv.most_similar(positive=desc, topn=5)
             for similar_desc, similarity in similar_descs:
                 if similarity > 0.8:  # Threshold for similarity
                     recurring_payments.append((month, section, ' '.join(desc), ' '.join(similar_desc)))
