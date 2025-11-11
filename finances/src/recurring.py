@@ -4,6 +4,7 @@ import numpy as np
 from gensim.models import Word2Vec
 from sklearn.metrics.pairwise import cosine_similarity
 from collections import defaultdict
+import json
 
 # Connect to the database
 conn = sqlite3.connect('finances/src/mint_transactions.db')  # double check path
@@ -38,11 +39,18 @@ transactions_df = pd.read_sql_query(query, conn, params=SUPPORTED_ACCOUNTS)
 # Convert Date column to Datetime
 transactions_df['Date'] = pd.to_datetime(transactions_df['Date'])
 
+# Function to convert period + section to int
+def _period_to_int(period_id: str) -> int:
+    """ period looks like 2025-02-<section> sec = day // 10"""
+    year, month, section = period_id.split("-")
+    return int(year) * 36 + (int(month) - 1) * 3 + int(section)
+
 # Function to identify recurring payments across DIFFERENT periods
 def identify_recurring_payments(
     df: pd.DataFrame,
     sim_threshold: float = 0.8,
     min_periods: int = 3,
+    min_consec: int = 3,
 ) -> list[dict]:
     """
     Detect subscription-like recurring payments.
@@ -59,8 +67,6 @@ def identify_recurring_payments(
     """
     df = df.copy()
     df["month"] = df["Date"].dt.to_period("M")
-    df["section"] = df["Date"].dt.day // 10  # 0,1,2  →  1-10,11-20,21-eom
-    df["period_id"] = df["month"].astype(str) + "-" + df["section"].astype(str)
 
     # ── 1️⃣  Build a Word2Vec model on *all* descriptions ────────────────────
     token_lists = df["Description"].str.lower().str.split().tolist()
@@ -80,6 +86,9 @@ def identify_recurring_payments(
         return np.mean(vecs, axis=0) if vecs else None
 
     sentence_vecs = [sent_vec(toks) for toks in token_lists]
+    with open("sentence_vecs.json", "w") as outfile: json.dump([vec.tolist()
+for vec in sentence_vecs],
+outfile)
     valid_idx = [i for i, v in enumerate(sentence_vecs) if v is not None]
 
     if len(valid_idx) < 2:
@@ -90,7 +99,7 @@ def identify_recurring_payments(
 
     # ── 3️⃣  Accumulate periods for every vector that is similar to another
     #         vector *in a different period* ────────────────────────────────
-    period_ids = df.loc[valid_idx, "period_id"].to_numpy(str)
+    month_ids = df.loc[valid_idx, "month"].to_numpy(str)
     desc_texts = df.loc[valid_idx, "Description"].to_numpy(str)
 
     recurring_map: defaultdict[int, set[str]] = defaultdict(set)
@@ -98,22 +107,21 @@ def identify_recurring_payments(
     for i_mat, j_mat in zip(*np.where(sim_mat >= sim_threshold)):
         if i_mat == j_mat:
             continue  # skip self-pair
-        if period_ids[i_mat] == period_ids[j_mat]:
-            continue  # same period → ignore
-        recurring_map[i_mat].add(period_ids[i_mat])
-        recurring_map[i_mat].add(period_ids[j_mat])
-        recurring_map[j_mat].add(period_ids[i_mat])
-        recurring_map[j_mat].add(period_ids[j_mat])
+        if month_ids[i_mat] == month_ids[j_mat]:
+            continue  # same month → ignore
+        recurring_map[i_mat].add(month_ids[j_mat])
+        recurring_map[j_mat].add(month_ids[i_mat])
 
     # ── 4️⃣  Build result list ──────────────────────────────────────────────
     results: list[dict] = []
-    for idx, periods in recurring_map.items():
-        if len(periods) >= min_periods:
+    for idx, months in recurring_map.items():
+        months = list({*months, month_ids[idx]})  # include the seed's own month
+        if len(months) >= min_periods and len(months) == len(set(months)):  #filter on consecutive periods and max 1 txn per month
             results.append(
                 {
                     "description": desc_texts[idx],
-                    "periods": periods,
-                    "count": len(periods),
+                    "months": set(months),
+                    "count": len(months),
                 }
             )
     return results
@@ -123,7 +131,7 @@ recurring_payments = identify_recurring_payments(transactions_df)
 
 # Print summary
 for rec in recurring_payments:
-    periods_sorted = ", ".join(sorted(rec["periods"]))
+    periods_sorted = ", ".join(sorted(rec["months"]))
     print(
         f"[{rec['count']:2d} periods] {rec['description']}\n"
         f"    periods → {periods_sorted}\n"
