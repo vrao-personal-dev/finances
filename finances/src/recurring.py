@@ -49,14 +49,15 @@ def _period_to_int(period_id: str) -> int:
 def identify_recurring_payments(
     df: pd.DataFrame,
     sim_threshold: float = 0.8,
-    min_periods: int = 3,
-    min_consec: int = 3,
+    min_months: int = 3,
+    window_days: int = 1,
 ) -> list[dict]:
     """
     Detect subscription-like recurring payments.
 
     A description is considered *recurring* when **similar transactions appear
-    in at least `min_periods` distinct month-sections** (3 per month).
+    in at least `min_months` distinct months** (max one per month) and the
+    transaction date (day-of-month) stays within ±`window_days`.
 
     Returns
     -------
@@ -101,29 +102,37 @@ outfile)
     #         vector *in a different period* ────────────────────────────────
     month_ids = df.loc[valid_idx, "month"].to_numpy(str)
     desc_texts = df.loc[valid_idx, "Description"].to_numpy(str)
+    date_days = df.loc[valid_idx, "Date"].dt.day.to_numpy()
 
-    recurring_map: defaultdict[int, set[str]] = defaultdict(set)
+    # Map: vector-index → indices of vectors in *different* months that are similar
+    similar_idx_map: defaultdict[int, set[int]] = defaultdict(set)
 
     for i_mat, j_mat in zip(*np.where(sim_mat >= sim_threshold)):
         if i_mat == j_mat:
-            continue  # skip self-pair
+            continue  # self-pair
         if month_ids[i_mat] == month_ids[j_mat]:
-            continue  # same month → ignore
-        recurring_map[i_mat].add(month_ids[j_mat])
-        recurring_map[j_mat].add(month_ids[i_mat])
+            continue  # same month – ignore
+        similar_idx_map[i_mat].add(j_mat)
+        similar_idx_map[j_mat].add(i_mat)
 
     # ── 4️⃣  Build result list ──────────────────────────────────────────────
     results: list[dict] = []
-    for idx, months in recurring_map.items():
-        months = list({*months, month_ids[idx]})  # include the seed's own month
-        if len(months) >= min_periods and len(months) == len(set(months)):  #filter on consecutive periods and max 1 txn per month
-            results.append(
-                {
-                    "description": desc_texts[idx],
-                    "months": set(months),
-                    "count": len(months),
-                }
-            )
+    for idx, similar_idxs in similar_idx_map.items():
+        idxs = {idx, *similar_idxs}  # include seed itself
+        months = {month_ids[i] for i in idxs}
+        if len(months) < min_months:
+            continue  # too few distinct months
+        # Enforce day-of-month alignment (±window_days)
+        days = [date_days[i] for i in idxs]
+        if max(days) - min(days) > window_days:
+            continue
+        results.append(
+            {
+                "description": desc_texts[idx],
+                "months": months,
+                "count": len(months),
+            }
+        )
     return results
 
 # Identify recurring payments (≥3 periods by default)
