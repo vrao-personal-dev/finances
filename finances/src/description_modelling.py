@@ -66,22 +66,20 @@ def clean_desc(text):
 conn = get_conn()
 cursor = conn.cursor()
 txn_df = pd.read_sql_query(query, conn, params=SUPPORTED_ACCOUNTS)
-token_lists = txn_df["Description"].apply(clean_desc).str.lower().str.split().tolist()
-# token_lists = txn_df["OriginalDescription"].apply(clean_desc).str.lower().str.split().tolist()
+# token_lists = txn_df["Description"].apply(clean_desc).str.lower().str.split().tolist()
+token_lists = txn_df["OriginalDescription"].apply(clean_desc).str.lower().str.split().tolist()
 
 raw_descriptions = txn_df["Description"].tolist()
 # used to get idx given descriptions for labeled df
 text_to_idx = {text: i for i, text in enumerate(raw_descriptions)}
 
-
 def sent_vec_fasttext(tok_list: list[str]) -> np.ndarray:
     return np.mean([ft.get_word_vector(t) for t in tok_list], axis=0)
 
-# just fasttext- no weighting- gives us >0.9 (~2%), <0.2` (61%), 0.2 - 0.4`
-# (29%), 0.4 - 0.7` (7%)
+# just fasttext- no weighting- gives us >0.9 (1.4%), <0.2` (64%), 0.2 - 0.4`
+# (31.3%), 0.4 - 0.7` (3%)
 vecs = np.vstack([sent_vec_fasttext(t) for t in token_lists])
 sim_mat = cosine_similarity(vecs)
-
 
 def get_bucket_counts(sim_mat):
     upper_triangle_indices = np.triu_indices_from(sim_mat, k=1)
@@ -91,9 +89,10 @@ def get_bucket_counts(sim_mat):
     count_buckets_3 = np.sum((scores >= 0.4) & (scores < 0.7))
     count_buckets_0 = np.sum(scores < 0.2)
 
+    tot = len(sim_mat) * len(sim_mat) / 2 - len(sim_mat) / 2.0
     print("Bucket percentages for >=0.9, 0.2-0.4, 0.4-0.7, <0.2")
     for buc in [count_buckets_1, count_buckets_2, count_buckets_3, count_buckets_0]:
-        print((buc / 1626306.0 * 100).round(4), end=' ')
+        print((buc / tot * 100).round(4), end=' ')
     print()
 
 def generate_review_df(sim_mat, min_sim=0.7, max_sim=0.8):
@@ -140,21 +139,18 @@ def sent_vec_weighted(tok_list):
     return np.average(vectors, axis=0, weights=weights)
 
 word2weight, tfidf3gram = get_models(token_lists)  # needed for weighting below
-# fastext w/ tfidf weights gives us >0.9 (1.5%), <0.2` (60%), 0.2 - 0.4`
-# (31%), 0.4 - 0.7` (6.4%)
+# fastext w/ tfidf weights gives us >0.9 (1.3%), <0.2` (64.5%), 0.2 - 0.4`
+# (30.9%), 0.4 - 0.7` (3.0%)
 vecs_weighted = np.vstack([sent_vec_weighted(t) for t in token_lists])
 sim_mat_weighted = cosine_similarity(vecs_weighted)
-
 
 def three_gram_vec_weighted(tok_list: list[str]) -> np.ndarray:
     return tfidf3gram.transform([" ".join(tok_list)])
 
-
-# tfidf3gram gives us
-# TODO: fill out
+# tfidf3gram gives us >0.9 (1.2%), <0.2 (97.7%), 0.2-0.4
+# (0.4%), 0.4 - 0.7 (0.6%)
 vecs_three_gram = vstack([three_gram_vec_weighted(t) for t in token_lists])
 sim_mat_3gram = cosine_similarity(vecs_three_gram)
-
 
 def get_score_by_idx(sim_mat, idx1, idx2):
     try:
